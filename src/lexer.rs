@@ -34,6 +34,7 @@ pub enum TokenTag {
     RParen,
     Identifier(String),
     IntegerLiteral(i32),
+    StringLiteral(String),
     EOF,
 }
 
@@ -156,14 +157,14 @@ impl<'a> Lexer<'a> {
                         }
                         _ => {
                             let value_result = str::parse::<i32>(number.as_str());
-                            
+
                             if let Err(e) = value_result {
                                 return Err(LexicalError {
                                     offset,
                                     col,
                                     row,
                                     message: e.to_string(),
-                                })
+                                });
                             } else {
                                 token = Ok(Token {
                                     tag: TokenTag::IntegerLiteral(value_result.unwrap()),
@@ -172,9 +173,73 @@ impl<'a> Lexer<'a> {
                                     col,
                                 });
                             }
-       
+
                             break;
                         }
+                    }
+                }
+            }
+            Some('"') => {
+                let mut string = String::new();
+
+                let offset = self.cur_offset;
+                let col = self.cur_col;
+                let row = self.cur_row;
+
+                self.next_char();
+
+                loop {
+                    match self.cur {
+                        Some('\\') => {
+                            self.next_char();
+
+                            match self.cur {
+                                Some('n') => string.push('\n'),
+                                Some('r') => string.push('\r'),
+                                Some('t') => string.push('\t'),
+                                Some('"') => string.push('"'),
+                                None => {
+                                    return Err(LexicalError {
+                                        offset,
+                                        col,
+                                        row,
+                                        message: "unexpected EOF when parsing string".to_string(),
+                                    })
+                                }
+                                _ => {
+                                    return Err(LexicalError {
+                                        offset,
+                                        col,
+                                        row,
+                                        message: "unknown escaped character".to_string(),
+                                    })
+                                }
+                            }
+                            self.next_char()
+                        }
+                        Some('"') => {
+                            self.next_char();
+
+                            return Ok(Token {
+                                tag: TokenTag::StringLiteral(string),
+                                offset,
+                                col,
+                                row,
+                            })
+                        }
+                        Some(c) => {
+                            string.push(c);
+                            self.next_char();
+                        }
+                        None => {
+                            return Err(LexicalError {
+                                offset,
+                                col,
+                                row,
+                                message: "unexpected EOF when parsing string".to_string(),
+                            })
+                        }
+
                     }
                 }
             }

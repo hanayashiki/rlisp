@@ -1,7 +1,8 @@
-use crate::ast::{DefineExpr, Expr, IdentifierExpr, Location, Program, IntegerLiteral};
+use crate::ast::{DefineExpr, Expr, IdentifierExpr, IntegerLiteral, Location, Program, CallExpr, StringLiteral};
 use crate::lexer;
 use crate::lexer::{LexicalError, Token, TokenTag};
 use std::fmt;
+use std::rc::Rc;
 
 #[derive(fmt::Debug)]
 pub enum ParserError {
@@ -57,7 +58,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) -> Result<Program, ParserError> {
-        let mut exprs = Vec::<Box<dyn Expr>>::new();
+        let mut exprs = Vec::<Rc<dyn Expr>>::new();
 
         loop {
             let token = self.cur_token();
@@ -83,7 +84,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_expr(&mut self) -> Result<Box<dyn Expr>, ParserError> {
+    pub fn parse_expr(&mut self) -> Result<Rc<dyn Expr>, ParserError> {
         let first_token = self.cur_token();
 
         match first_token {
@@ -108,6 +109,13 @@ impl<'a> Parser<'a> {
                 // 'integer'
                 return Ok(self.parse_integer()?);
             }
+            Token {
+                tag: TokenTag::StringLiteral(_),
+                ..
+            } => {
+                // 'string'
+                return Ok(self.parse_string()?);
+            }
             _ => {
                 return Err(ParserError::SyntaticError {
                     location: Location {
@@ -121,7 +129,7 @@ impl<'a> Parser<'a> {
         };
     }
 
-    pub fn parse_identifier(&mut self) -> Result<Box<IdentifierExpr>, ParserError> {
+    pub fn parse_identifier(&mut self) -> Result<Rc<IdentifierExpr>, ParserError> {
         let first_token = self.cur_token();
 
         match first_token {
@@ -131,7 +139,7 @@ impl<'a> Parser<'a> {
             } => {
                 // 'identifier'
                 self.next_token()?;
-                return Ok(Box::new(IdentifierExpr {
+                return Ok(Rc::new(IdentifierExpr {
                     location: Location {
                         col: first_token.col,
                         row: first_token.row,
@@ -153,7 +161,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_integer(&mut self) -> Result<Box<IntegerLiteral>, ParserError> {
+    pub fn parse_integer(&mut self) -> Result<Rc<IntegerLiteral>, ParserError> {
         let first_token = self.cur_token();
 
         match first_token {
@@ -162,7 +170,7 @@ impl<'a> Parser<'a> {
                 ..
             } => {
                 self.next_token()?;
-                return Ok(Box::new(IntegerLiteral {
+                return Ok(Rc::new(IntegerLiteral {
                     location: Location {
                         col: first_token.col,
                         row: first_token.row,
@@ -170,7 +178,7 @@ impl<'a> Parser<'a> {
                     },
                     value,
                 }));
-            },
+            }
             _ => {
                 return Err(ParserError::SyntaticError {
                     location: Location {
@@ -183,8 +191,39 @@ impl<'a> Parser<'a> {
             }
         }
     }
- 
-    fn parse_call_like(&mut self) -> Result<Box<dyn Expr>, ParserError> {
+
+    pub fn parse_string(&mut self) -> Result<Rc<StringLiteral>, ParserError> {
+        let first_token = self.cur_token();
+
+        match first_token {
+            Token {
+                tag: TokenTag::StringLiteral(value),
+                ..
+            } => {
+                self.next_token()?;
+                return Ok(Rc::new(StringLiteral {
+                    location: Location {
+                        col: first_token.col,
+                        row: first_token.row,
+                        offset: first_token.offset,
+                    },
+                    value,
+                }));
+            }
+            _ => {
+                return Err(ParserError::SyntaticError {
+                    location: Location {
+                        col: first_token.col,
+                        row: first_token.row,
+                        offset: first_token.offset,
+                    },
+                    message: String::from("unexpected token when parsing integer. "),
+                })
+            }
+        }
+    }
+
+    fn parse_call_like(&mut self) -> Result<Rc<dyn Expr>, ParserError> {
         // parse '('
         let lparen = self.cur_token();
 
@@ -192,66 +231,80 @@ impl<'a> Parser<'a> {
         let first_arg = self.next_token()?;
 
         match first_arg {
-
             Token {
-                tag: TokenTag::Identifier(identifier),
+                tag: TokenTag::Identifier(ref identifier),
                 ..
-            } => match identifier.as_str() {
-                "define" => {
-                    self.next_token()?;
+            } if identifier == "define" => {
+                self.next_token()?;
 
-                    let identifier_expr = self.parse_identifier()?;
+                let identifier_expr = self.parse_identifier()?;
 
-                    let value_expr = self.parse_expr()?;
+                let value_expr = self.parse_expr()?;
 
-                    let rparen = self.cur_token();
+                let rparen = self.cur_token();
 
-                    match rparen {
+                match rparen {
+                    Token {
+                        tag: TokenTag::RParen,
+                        ..
+                    } => {
+                        self.next_token()?;
+                    }
+                    _ => {
+                        return Err(ParserError::SyntaticError {
+                            location: Location {
+                                col: first_arg.col,
+                                row: first_arg.row,
+                                offset: first_arg.offset,
+                            },
+                            message: String::from("expecting ')' at the end of define expression "),
+                        })
+                    }
+                }
+
+                let define_expr = Rc::new(DefineExpr {
+                    location: Location {
+                        col: lparen.col,
+                        offset: lparen.offset,
+                        row: lparen.row,
+                    },
+                    identifier: identifier_expr,
+                    value: value_expr,
+                });
+
+                Ok(define_expr)
+            }
+            Token {
+                tag: TokenTag::Identifier(_) | TokenTag::LParen,
+                ..
+            } => {
+                let function = self.parse_expr()?;
+
+                let mut parameters = Vec::<Rc<dyn Expr>>::new();
+
+                loop {
+                    let token = self.cur_token();
+
+                    match token {
                         Token {
-                            tag: TokenTag::RParen,
-                            ..
+                            tag: TokenTag::RParen, ..
                         } => {
                             self.next_token()?;
-                        }
-                        _ => {
-                            return Err(ParserError::SyntaticError {
+                            let call_expr = Rc::new(CallExpr {
                                 location: Location {
-                                    col: first_arg.col,
-                                    row: first_arg.row,
-                                    offset: first_arg.offset,
+                                    col: lparen.col,
+                                    row: lparen.row,
+                                    offset: lparen.offset,
                                 },
-                                message: String::from(
-                                    "expecting ')' at the end of define expression ",
-                                ),
-                            })
+                                function,
+                                parameters,
+                            });
+                            return Ok(call_expr)
                         }
+                        _ => parameters.push(self.parse_expr()?),
                     }
-
-                    let define_expr = Box::new(DefineExpr {
-                        location: Location {
-                            col: lparen.col,
-                            offset: lparen.offset,
-                            row: lparen.row,
-                        },
-                        identifier: identifier_expr,
-                        value: value_expr,
-                    });
-
-                    Ok(define_expr)
                 }
-                _ => {
-                    return Err(ParserError::SyntaticError {
-                        location: Location {
-                            col: first_arg.col,
-                            row: first_arg.row,
-                            offset: first_arg.offset,
-                        },
-                        message: String::from(
-                            "unexpected token when parsing call-like expression. ",
-                        ),
-                    })
-                }
-            },
+            }
             _ => {
                 return Err(ParserError::SyntaticError {
                     location: Location {

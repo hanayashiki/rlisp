@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::rc::Rc;
 use crate::evaluate;
 
 #[derive(Debug, Clone)]
@@ -18,8 +19,8 @@ pub trait Expr: Node {
 #[derive(Debug)]
 pub struct DefineExpr {
     pub location: Location,
-    pub identifier: Box<IdentifierExpr>,
-    pub value: Box<dyn Expr>,
+    pub identifier: Rc<IdentifierExpr>,
+    pub value: Rc<dyn Expr>,
 }
 
 impl Node for DefineExpr {
@@ -34,6 +35,8 @@ impl Expr for DefineExpr {
 #[derive(Debug)]
 pub struct CallExpr {
     pub location: Location,
+    pub function: Rc<dyn Expr>,
+    pub parameters: Vec<Rc<dyn Expr>>,
 }
 
 impl Expr for CallExpr {
@@ -76,9 +79,24 @@ impl Node for IntegerLiteral {
 }
 
 #[derive(Debug)]
+pub struct StringLiteral {
+    pub location: Location,
+    pub value: String,
+}
+
+impl Expr for StringLiteral {
+}
+
+impl Node for StringLiteral {
+    fn location(&self) -> &Location {
+        &self.location
+    }
+}
+
+#[derive(Debug)]
 pub struct Program {
     pub location: Location,
-    pub exprs: Vec<Box<dyn Expr>>,
+    pub exprs: Vec<Rc<dyn Expr>>,
 }
 
 impl Node for Program {
